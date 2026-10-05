@@ -1892,8 +1892,7 @@ async def main():
     await dp.start_polling(bot)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+
 @dp.callback_query(F.data.regexp(r"^war_res:(\d+):(fact|atk|def|reject)$"))
 async def handle_war_resolution(query: CallbackQuery):
     if query.from_user.id not in ADMINS:
@@ -2023,3 +2022,7 @@ async def handle_war_resolution(query: CallbackQuery):
     except Exception:
         pass
     await query.answer("نتیجه جنگ با موفقیت ثبت و در کانال اعلام گردید.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
