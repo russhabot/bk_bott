@@ -131,7 +131,10 @@
     if(action==='state'&&!tg?.initData){
       loadError='اطلاعات ورود تلگرام دریافت نشد. این صفحه را از دکمه‌ی «ورود به بازی» داخل گفتگوی ربات باز کنید.';
       authError=true;
-      render();return;
+      if(S.bg_music && !$('#bg-music').src){
+      $('#bg-music').src = S.bg_music;
+    }
+    render();return;
     }
     try{
       const response=await fetch('/api/'+encodeURIComponent(action),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,init:tg?.initData||''})});
@@ -148,6 +151,9 @@
       if(action==='state'){loadError='ارتباط با سرور برقرار نشد. اتصال اینترنت و آدرس سرور را بررسی کنید و دوباره تلاش کنید.';authError=false}
       else alertUser('ارتباط با سرور برقرار نشد.')
     }
+    if(S.bg_music && !$('#bg-music').src){
+      $('#bg-music').src = S.bg_music;
+    }
     render();
   }
   const btn=(text,handler,kind='')=>`<button class="button ${kind}" onclick="${handler}">${text}</button>`;
@@ -160,6 +166,9 @@
   function searchCountries(value){
     q=value;
     const old=$('#country-search');const pos=old?.selectionStart??q.length;
+    if(S.bg_music && !$('#bg-music').src){
+      $('#bg-music').src = S.bg_music;
+    }
     render();
     const input=$('#country-search');
     if(input){input.focus();input.setSelectionRange(pos,pos)}
@@ -314,7 +323,122 @@
   function statement(){
     return `<h2>📢 صدور بیانیه</h2><div class="notice good">بیانیه پس از ثبت، مستقیم در کانال منتشر می‌شود و نیاز به تأیید ادمین ندارد. برای جلوگیری از اسپم، فاصله‌ی ۱۵ دقیقه‌ای و سقف ۵ بیانیه در روز اعمال می‌شود.</div><textarea id="statement-text" maxlength="850" rows="5" placeholder="متن بیانیه رسمی کشور"></textarea><label class="field-label">لینک تصویر (اختیاری، HTTPS)</label><input id="statement-image" type="url" placeholder="https://example.com/image.jpg"><button class="button wide" onclick="act('stmt',{text:val('statement-text'),img:val('statement-image')})">انتشار بیانیه در کانال</button>`;
   }
-  function render(){
+  
+let warTarget = '';
+let warTroops = {};
+
+function toggleMusic(){
+  const a = $('#bg-music');
+  const t = $('#music-text');
+  if(!a) return;
+  if(!a.src && S?.bg_music){
+    a.src = S.bg_music;
+  }
+  if(!a.src){
+    toast('لینک موزیک در تنظیمات سرور ثبت نشده است.');
+    return;
+  }
+  if(a.paused){
+    a.play().then(()=>{
+      t.textContent = 'موزیک: روشن';
+      toast('موزیک پس‌زمینه پخش شد.');
+    }).catch(e=>{
+      toast('مرورگر اجازه پخش خودکار نداد؛ دوباره کلیک کنید.');
+    });
+  } else {
+    a.pause();
+    t.textContent = 'موزیک: خاموش';
+    toast('موزیک پس‌زمینه متوقف شد.');
+  }
+}
+
+function updateWarTroop(key, delta, maxVal){
+  const cur = Number(warTroops[key] || 0);
+  const next = Math.max(0, Math.min(maxVal, cur + delta));
+  warTroops[key] = next;
+  const el = $(`#war-count-${key}`);
+  if(el) el.value = next;
+}
+
+function warPage(h, p){
+  const isOpen = (S.war === 'on');
+  let targetsHtml = (S.others || []).map(code => 
+    `<option value="${code}" ${warTarget===code?'selected':''}>${nm(code)} (${code})</option>`
+  ).join('');
+
+  const unitRows = Object.entries(p.u || {}).filter(([k, cnt]) => cnt > 0 && S.U[k] && S.U[k].atk > 0).map(([k, cnt]) => {
+    const u = S.U[k];
+    const curVal = warTroops[k] || 0;
+    return `<div class="row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #202d42;">
+      <div>
+        <b>${esc(u.fa)}</b>
+        <div class="muted" style="font-size:11px;">موجودی: ${cnt.toLocaleString('fa-IR')} | قدرت تهاجم: ${u.atk}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <button class="button" style="padding:3px 10px;font-size:14px;" onclick="updateWarTroop('${k}', -10, ${cnt})">-10</button>
+        <button class="button" style="padding:3px 8px;font-size:14px;" onclick="updateWarTroop('${k}', -1, ${cnt})">-</button>
+        <input id="war-count-${k}" type="number" min="0" max="${cnt}" value="${curVal}" style="width:65px;text-align:center;padding:4px;border-radius:8px;background:#0d1625;border:1px solid var(--line);color:#fff;" onchange="warTroops['${k}']=Math.max(0,Math.min(${cnt},Number(this.value)||0))">
+        <button class="button" style="padding:3px 8px;font-size:14px;" onclick="updateWarTroop('${k}', 1, ${cnt})">+</button>
+        <button class="button" style="padding:3px 10px;font-size:14px;" onclick="updateWarTroop('${k}', 10, ${cnt})">+10</button>
+        <button class="button" style="padding:3px 8px;font-size:11px;" onclick="updateWarTroop('${k}', ${cnt}, ${cnt})">حداکثر</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  return h + `<h2>⚔️ ستاد فرماندهی و عملیات جنگی</h2>
+    <div class="notice ${isOpen ? 'good' : 'warn'}">
+      ${isOpen ? '🟢 وضعیت جنگ: <b>باز و آماده عملیات</b>' : '🔴 وضعیت جنگ: <b>توسط ادمین بسته است</b>'}
+      <div class="muted" style="margin-top:4px;">هزینه آغاز عملیات: <b>${S.WP || 30} قدرت سیاسی (PP)</b> | PP شما: <b>${p.pp}</b></div>
+    </div>
+
+    <section class="card">
+      <h3>۱. انتخاب کشور هدف</h3>
+      <select id="war-target-select" class="button" style="width:100%;padding:10px;text-align:right;background:#0d1625;margin:8px 0 16px;" onchange="warTarget=this.value">
+        <option value="">-- یک کشور را انتخاب کنید --</option>
+        ${targetsHtml}
+      </select>
+
+      <h3>۲. تعیین نیروها و تجهیزات ارسالی</h3>
+      <div style="margin:8px 0 16px;">
+        ${unitRows || '<p class="muted">شما در حال حاضر نیروی نظامی تهاجمی آماده‌ای در ارتش خود ندارید.</p>'}
+      </div>
+
+      <h3>۳. نگارش سناریوی جنگی (سنا)</h3>
+      <p class="muted" style="font-size:12px;">سناریوی دقیق تاکتیکی خود را شرح دهید (حداقل ۲۰ کاراکتر). این سناریو در کانال اعلام و برای داوری به ادمین ارسال می‌شود.</p>
+      <textarea id="war-scenario" style="width:100%;height:110px;border-radius:12px;padding:10px;background:#0d1625;border:1px solid var(--line);color:#fff;font:inherit;resize:vertical;" placeholder="شرح نقشه حمله، اهداف استراتژیک، مانور نیروها..."></textarea>
+
+      <h3 style="margin-top:12px;">۴. دلیل رسمی اعلام جنگ (اختیاری)</h3>
+      <input id="war-reason" type="text" style="width:100%;padding:10px;border-radius:12px;background:#0d1625;border:1px solid var(--line);color:#fff;font:inherit;margin-bottom:16px;" placeholder="دلیل سیاسی، دفاعی یا اقتصادی">
+
+      <button class="button" style="width:100%;padding:12px;background:linear-gradient(145deg,#ff7888,#b52a3a);color:#fff;font-weight:bold;font-size:15px;" onclick="submitWar()">🚀 ثبت و ارسال سناریوی حمله به ستاد کل</button>
+    </section>`;
+}
+
+async function submitWar(){
+  if(S.war !== 'on') return alertUser('در حال حاضر جنگ‌ها توسط ادمین بسته شده است.');
+  const target = $('#war-target-select')?.value || warTarget;
+  if(!target) return alertUser('لطفاً کشور هدف را انتخاب کنید.');
+  
+  const sc = ($('#war-scenario')?.value || '').trim();
+  if(sc.length < 20) return alertUser('سناریوی حمله باید حداقل ۲۰ کاراکتر باشد.');
+  
+  const why = ($('#war-reason')?.value || '').trim();
+  
+  const send = {};
+  for(const [k, v] of Object.entries(warTroops)){
+    if(Number(v) > 0) send[k] = Number(v);
+  }
+  if(!Object.keys(send).length) return alertUser('حداقل باید یک واحد نظامی برای حمله انتخاب کنید.');
+
+  const res = await act('war', { c: target, sc, why, send });
+  if(!res.err){
+    alertUser('⚔️ سناریوی حمله با موفقیت ثبت شد! اعلان آغاز جنگ در کانال منتشر و پرونده جهت تصمیم‌گیری به ادمین ارسال گردید.');
+    warTroops = {};
+    go('home');
+  }
+}
+
+function render(){
     document.querySelectorAll('nav button').forEach(button=>button.classList.toggle('on',button.dataset.tab===tab));
     const app=$('#app'),pill=$('#season-pill');
     if(gate){pill.textContent='عضویت لازم است';app.innerHTML=`<section class="card hero"><div class="brand-icon" style="margin:auto">🔥</div><h1>ورود به بازی</h1><p>برای بازی باید عضو چت و کانال باشید.</p>${gate.map(chat=>btn(esc(chat),`tg?.openTelegramLink?.('https://t.me/${encodeURIComponent(chat.replace('@',''))}')`,'secondary')).join('<br>')}<br>${btn('✅ عضو شدم','call("state")','wide')}</section>`;return}
