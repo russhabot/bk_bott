@@ -63,6 +63,7 @@ CHATS = [
     if value.strip()
 ]
 CHANNEL = os.environ.get("ANNOUNCE_CHANNEL", "@_burnt_kingdoms").strip()
+BACKGROUND_MUSIC_URL = os.environ.get("BACKGROUND_MUSIC_URL", "").strip()
 DB_PATH = os.environ.get("DB_PATH", "bk.db")
 TZ = ZoneInfo("Asia/Tehran")
 FA = Locale("fa").territories
@@ -77,6 +78,18 @@ db.executescript(
     """
     CREATE TABLE IF NOT EXISTS p(uid INTEGER PRIMARY KEY, d TEXT);
     CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE IF NOT EXISTS pending_wars (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attacker_uid INTEGER,
+        defender_uid INTEGER,
+        attacker_country TEXT,
+        defender_country TEXT,
+        units TEXT,
+        scenario TEXT,
+        reason TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at INTEGER
+    );
     CREATE TABLE IF NOT EXISTS rq(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         uid INTEGER,
@@ -950,12 +963,12 @@ async def a_war(uid, user, player, body):
     target_uid, target = valid_target(uid, body.get("c"))
     if not target:
         return "کشور هدف نامعتبر است."
-    scenario = str(body.get("sc", "")).strip()[:800]
+    scenario = str(body.get("sc", "")).strip()[:1000]
     reason = str(body.get("why", "")).strip()[:400]
     if len(scenario) < 20:
         return "سناریوی حمله باید حداقل ۲۰ حرف باشد."
     if player["pp"] < WAR_PP:
-        return "قدرت سیاسی کافی نیست."
+        return f"قدرت سیاسی کافی نیست (نیاز به {WAR_PP} PP)."
     send = {}
     for key, amount in (body.get("send") or {}).items():
         if key not in UNITS or UNITS[key]["atk"] <= 0:
@@ -964,47 +977,75 @@ async def a_war(uid, user, player, body):
         if count > 0:
             if UNITS[key].get("lock") and not player.get("nuke_ok"):
                 return "بمب اتم قفل است."
-            send[key] = min(count, safe_int(player["u"].get(key)))
+            avail = safe_int(player["u"].get(key))
+            if count > avail:
+                return f"تعداد {UNITS[key]['fa']} انتخابی بیشتر از موجودی شماست."
+            send[key] = count
     if not sum(send.values()):
         return "هیچ نیرویی برای حمله انتخاب نشده است."
-    attack = sum(UNITS[key]["atk"] * count for key, count in send.items())
-    defense = sum(
-        UNITS[key]["df"] * safe_int(count)
-        for key, count in target.get("u", {}).items()
-        if key in UNITS
-    )
-    attack *= 1.1 if "mil_1" in player["t"] else 1
-    wins = attack * random.uniform(0.85, 1.15) > (
-        max(50, defense) * random.uniform(0.85, 1.15)
-    )
+
+    # کسر قدرت سیاسی و انتقال نیروها به صف نبرد
     player["pp"] -= WAR_PP
     player["wt"] = safe_int(player.get("wt")) + 1
-    for key, count in send.items():
-        player["u"][key] = max(
-            0,
-            safe_int(player["u"].get(key))
-            - int(count * (0.12 if wins else 0.30)),
-        )
-    for key, count in list(target["u"].items()):
-        if key in UNITS:
-            target["u"][key] = int(
-                safe_int(count) * (0.72 if wins else 0.92)
-            )
-    if wins:
-        loot = int(safe_int(target["money"]) * 0.1)
-        target["money"] -= loot
-        player["money"] += loot
-        target["happy"] = max(0, target["happy"] - 8)
+    for k, cnt in send.items():
+        player["u"][k] = max(0, safe_int(player["u"].get(k)) - cnt)
     pset(uid, player)
-    pset(target_uid, target)
-    await announce(
-        f"⚔️ {cname(player['c'])} به {cname(target['c'])} حمله کرد!\n\n"
-        f"📜 سناریو: {scenario}\n"
-        + (f"🇺🇳 دلیل اعلام‌شده: {reason}\n" if reason else "")
-        + f"\n{'✅ حمله موفق بود' if wins else '❌ حمله عقب‌نشینی کرد'}"
-    )
-    return None
 
+    # ذخیره جنگ در دیتابیس
+    now = int(time.time())
+    send_json = json.dumps(send, ensure_ascii=False)
+    cur = db.execute(
+        "INSERT INTO pending_wars (attacker_uid, defender_uid, attacker_country, defender_country, units, scenario, reason, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+        (uid, target_uid, player["c"], target["c"], send_json, scenario, reason, now),
+    )
+    db.commit()
+    war_id = cur.lastrowid
+
+    # ساخت متن تسلیحات
+    units_text = "\n".join([f"  ▫️ {UNITS[k]['fa']}: {cnt:,} عدد" for k, cnt in send.items()])
+
+    # اطلاع‌رسانی آنی در کانال
+    announce_msg = (
+        f"🚨 <b>اعلان رسمی آغاز عملیات نظامی!</b>\n\n"
+        f"🚩 <b>متخاصم (مهاجم):</b> {cname(player['c'])}\n"
+        f"🎯 <b>کشور هدف (مدافع):</b> {cname(target['c'])}\n\n"
+        f"🪖 <b>تسلیحات و نیروهای اعزامی:</b>\n{units_text}\n\n"
+        f"📜 <b>سناریوی حمله:</b>\n{scenario}\n"
+        + (f"\n🇺🇳 <b>علت اعلام‌شده:</b> {reason}\n" if reason else "")
+        + f"\n⏳ <i>سناریو به ستاد کل فرماندهی (ادمین) ارسال شد. نتیجه پس از بررسی کارشناسی اعلام می‌گردد.</i>"
+    )
+    await announce(announce_msg)
+
+    # ارسال برای ادمین‌ها با دکمه‌های شیشه‌ای
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🏭 تخریب کارخانه مدافع", callback_data=f"war_res:{war_id}:fact"),
+                InlineKeyboardButton(text="💥 پیروزی قاطع مهاجم", callback_data=f"war_res:{war_id}:atk"),
+            ],
+            [
+                InlineKeyboardButton(text="🛡 دفاع موفق مدافع", callback_data=f"war_res:{war_id}:def"),
+                InlineKeyboardButton(text="❌ رد سناریو و استرداد", callback_data=f"war_res:{war_id}:reject"),
+            ],
+        ]
+    )
+    admin_msg = (
+        f"⚔️ <b>سناریوی جنگ جدید (شماره #{war_id})</b>\n\n"
+        f"🚩 مهاجم: {cname(player['c'])} (@{player.get('username') or 'ندارد'}, ID: <code>{uid}</code>)\n"
+        f"🎯 مدافع: {cname(target['c'])} (@{target.get('username') or 'ندارد'}, ID: <code>{target_uid}</code>)\n\n"
+        f"🪖 <b>نیروهای ارسالی:</b>\n{units_text}\n\n"
+        f"📜 <b>متن سناریو:</b>\n{scenario}\n"
+        + (f"🇺🇳 دلیل: {reason}\n" if reason else "")
+        + f"\nلطفاً نتیجه را تعیین کنید:"
+    )
+    for adm in ADMINS:
+        try:
+            await bot.send_message(adm, admin_msg, reply_markup=kb, parse_mode="HTML")
+        except Exception as e:
+            print(f"Failed to send war to admin {adm}:", e)
+
+    return None
 
 def spam_violation(player, reason, severe=False):
     player["stmt_strikes"] = safe_int(player.get("stmt_strikes")) + (
@@ -1176,6 +1217,7 @@ def api_state(uid, player, season):
         "TP": TRADE_PP,
         "bank_limit": BANK_TRANSFER_LIMIT,
         "loan_limit": LOAN_LIMIT,
+        "bg_music": BACKGROUND_MUSIC_URL,
     }
 
 
@@ -1852,3 +1894,132 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+@dp.callback_query(F.data.regexp(r"^war_res:(\d+):(fact|atk|def|reject)$"))
+async def handle_war_resolution(query: CallbackQuery):
+    if query.from_user.id not in ADMINS:
+        return await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+
+    parts = query.data.split(":")
+    war_id = int(parts[1])
+    decision = parts[2]
+
+    row = db.execute(
+        "SELECT attacker_uid, defender_uid, attacker_country, defender_country, units, scenario, status FROM pending_wars WHERE id=?",
+        (war_id,)
+    ).fetchone()
+
+    if not row:
+        return await query.answer("این رکورد جنگ یافت نشد.", show_alert=True)
+
+    atk_uid, def_uid, atk_c, def_c, units_json, scenario, status = row
+    if status != "pending":
+        return await query.answer(f"این نبرد قبلاً تعیین وضعیت شده است: {status}", show_alert=True)
+
+    sent_units = json.loads(units_json)
+    atk = pget(atk_uid)
+    defn = pget(def_uid)
+    if not atk or not defn:
+        return await query.answer("اطلاعات یکی از طرفین جنگ یافت نشد.", show_alert=True)
+
+    admin_name = query.from_user.full_name
+    result_title = ""
+    result_details = ""
+
+    if decision == "fact":
+        destroyed = []
+        for f_key in ["f_chip", "f_oil", "f_steel", "f_light"]:
+            if defn.get("b", {}).get(f_key, 0) > 0:
+                defn["b"][f_key] -= 1
+                destroyed.append(BUILDINGS[f_key]["fa"])
+                break
+        if not destroyed and defn.get("b"):
+            for b_key in list(defn["b"].keys()):
+                if defn["b"][b_key] > 0:
+                    defn["b"][b_key] -= 1
+                    destroyed.append(BUILDINGS.get(b_key, {}).get("fa", b_key))
+                    break
+
+        dest_text = "، ".join(destroyed) if destroyed else "زیرساخت‌های اقتصادی"
+        loot = int(safe_int(defn.get("money")) * 0.12)
+        defn["money"] = max(0, defn.get("money", 0) - loot)
+        atk["money"] = atk.get("money", 0) + loot
+        defn["happy"] = max(0, defn.get("happy", 50) - 15)
+
+        for k, cnt in sent_units.items():
+            atk["u"][k] = safe_int(atk["u"].get(k)) + int(cnt * 0.85)
+        for k in list(defn.get("u", {}).keys()):
+            defn["u"][k] = int(safe_int(defn["u"][k]) * 0.70)
+
+        result_title = f"🏭 <b>پیروزی قاطع و تخریب زیرساخت‌های {cname(def_c)}!</b>"
+        result_details = (
+            f"💥 عملیات موفقیت‌آمیز بود و کارخانه‌های مدافع منهدم شد.\n"
+            f"🔻 خسارت صنعتی: <b>{dest_text}</b>\n"
+            f"💰 غنایم جنگی: {loot:,}$\n"
+            f"📉 رضایت عمومی مدافع: ۱۵- واحد کاهش یافت."
+        )
+
+    elif decision == "atk":
+        loot = int(safe_int(defn.get("money")) * 0.08)
+        defn["money"] = max(0, defn.get("money", 0) - loot)
+        atk["money"] = atk.get("money", 0) + loot
+        defn["happy"] = max(0, defn.get("happy", 50) - 8)
+
+        for k, cnt in sent_units.items():
+            atk["u"][k] = safe_int(atk["u"].get(k)) + int(cnt * 0.75)
+        for k in list(defn.get("u", {}).keys()):
+            defn["u"][k] = int(safe_int(defn["u"][k]) * 0.80)
+
+        result_title = f"💥 <b>پیروزی میدانی {cname(atk_c)} علیه {cname(def_c)}!</b>"
+        result_details = (
+            f"✅ سناریو تأیید شد و خطوط دفاعی شکسته شد.\n"
+            f"💰 غنایم: {loot:,}$\n"
+            f"🔻 تلفات به ارتش مدافع وارد آمد."
+        )
+
+    elif decision == "def":
+        for k, cnt in sent_units.items():
+            atk["u"][k] = safe_int(atk["u"].get(k)) + int(cnt * 0.40)
+        for k in list(defn.get("u", {}).keys()):
+            defn["u"][k] = int(safe_int(defn["u"][k]) * 0.90)
+        atk["happy"] = max(0, atk.get("happy", 50) - 8)
+
+        result_title = f"🛡 <b>دفاع موفق {cname(def_c)} و دفع تهاجم!</b>"
+        result_details = (
+            f"❌ دفاع با موفقیت انجام شد و مهاجم با ۶۰٪ تلفات عقب نشست.\n"
+            f"🔻 روحیه عمومی مهاجم کاهش یافت."
+        )
+
+    elif decision == "reject":
+        atk["pp"] = atk.get("pp", 0) + WAR_PP
+        for k, cnt in sent_units.items():
+            atk["u"][k] = safe_int(atk["u"].get(k)) + cnt
+
+        result_title = f"🚫 <b>ابطال عملیات نظامی {cname(atk_c)} علیه {cname(def_c)}!</b>"
+        result_details = (
+            f"⚠️ سناریوی ارسالی توسط ستاد داوری رد شد.\n"
+            f" نیروها و امتیاز سیاسی به کشور مبدأ بازگردانده شد."
+        )
+
+    pset(atk_uid, atk)
+    pset(def_uid, defn)
+    db.execute("UPDATE pending_wars SET status=? WHERE id=?", (decision, war_id))
+    db.commit()
+
+    channel_res = (
+        f"⚖️ <b>اعلام نتیجه نهایی نبرد (پرونده #{war_id})</b>\n\n"
+        f"{result_title}\n\n"
+        f"🚩 مهاجم: {cname(atk_c)}\n"
+        f"🎯 مدافع: {cname(def_c)}\n\n"
+        f"{result_details}\n\n"
+        f"✍️ ارزیابی ستاد داوری: {admin_name}"
+    )
+    await announce(channel_res)
+
+    try:
+        await query.message.edit_text(
+            query.message.html_text + f"\n\n✅ <b>نتیجه توسط {admin_name} ثبت شد: {decision}</b>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    await query.answer("نتیجه جنگ با موفقیت ثبت و در کانال اعلام گردید.")
