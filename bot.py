@@ -1183,21 +1183,26 @@ def api_state(uid, player, season):
         elif safe_int(body.get("target_uid")) == uid:
             incoming.append(record)
     players = allp()
-    countries_taken = [p["c"] for _, p in players if p.get("c")]
+    countries_taken = [str(p["c"]).strip().upper() for _, p in players if p.get("c")]
     others = [
-        p["c"]
+        str(p["c"]).strip().upper()
         for other_uid, p in players
         if other_uid != uid and p.get("alive") and p.get("c")
     ]
-    owners = {
-        str(p["c"]).upper(): {
-            "name": str(p.get("name") or "")[:80],
-            "username": str(p.get("username") or "")[:32],
+    owners = {}
+    for other_uid, p in players:
+        c = str(p.get("c") or "").strip().upper()
+        if not c:
+            continue
+        p_name = str(p.get("name") or "").strip()
+        p_uname = str(p.get("username") or "").strip().lstrip("@")
+        owners[c] = {
+            "name": p_name[:80],
+            "username": p_uname[:32],
             "uid": other_uid,
         }
-        for other_uid, p in players
-        if p.get("c")
-    }
+        # Also store lowercase key for backwards compatibility
+        owners[c.lower()] = owners[c]
     return {
         "season": season,
         "p": player,
@@ -1883,7 +1888,13 @@ async def main():
     print(f"[startup] Telegram token accepted for @{bot_identity.username}")
     app = web.Application(client_max_size=64 * 1024)
     app.router.add_post("/api/{a}", api)
-    app.router.add_get("/", lambda request: web.FileResponse("index.html"))
+    async def index_handler(request):
+        response = web.FileResponse("index.html")
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+    app.router.add_get("/", index_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(
