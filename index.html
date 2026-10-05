@@ -174,10 +174,13 @@
     if(input){input.focus();input.setSelectionRange(pos,pos)}
   }
   function ownerLabel(code){
-    const owner=S?.owners?.[code];
+    if(!code)return '';
+    const c = String(code).toUpperCase();
+    const owner = S?.owners?.[c] || S?.owners?.[code];
     if(!owner)return '';
-    const label=[String(owner.name||'').trim(),owner.username?`@${String(owner.username).trim()}`:''].filter(Boolean).join(' · ');
-    return label?`<small class="country-owner">فرمانروا: ${esc(label)}</small>`:'<small class="country-owner">کشور انتخاب شده</small>';
+    let label = [String(owner.name||'').trim(), owner.username ? `@${String(owner.username).trim()}` : ''].filter(Boolean).join(' · ');
+    if(!label && owner.uid) label = `شناسه: ${owner.uid}`;
+    return label ? `<small class="country-owner">👑 فرمانروا: ${esc(label)}</small>` : '<small class="country-owner">کشور انتخاب شده</small>';
   }
   function pick(){
     const list=(S.C||[]).map(c=>({c,n:nm(c)})).filter(x=>!q||x.n.toLowerCase().includes(q.toLowerCase())||x.c.toLowerCase().includes(q.toLowerCase())).sort((a,b)=>a.n.localeCompare(b.n,'fa'));
@@ -201,7 +204,11 @@
       <section class="card"><div class="capacity"><span>😊 رضایت عمومی</span><b>${Math.round(p.happy)}٪</b></div><div class="meter"><i style="width:${Math.max(0,Math.min(100,p.happy))}%"></i></div><div class="capacity" style="margin-top:12px"><span>📦 ظرفیت انبار تسلیحات</span><b>${fmt(S.used)} از ${fmt(S.cap)}</b></div><div class="meter"><i style="width:${S.cap?Math.min(100,S.used/S.cap*100):0}%;background:linear-gradient(90deg,var(--cyan),#858cff)"></i></div></section>`;
   }
   function menuItem(icon,title,sub,path){return `<button class="menu-button" onclick="go('${path}')"><span class="menu-icon">${icon}</span><b>${title}</b><small>${sub}</small></button>`}
-  function go(path){V=path;render()}
+  function go(path){
+    if(path==='home'||path==='stmt'){tab=path;V=''}
+    else{tab='manage';V=path}
+    render();
+  }
   function relationPanel(player,country){
     const badges=[];
     if(player.embassies?.includes(country))badges.push('سفارت ما فعال است');
@@ -210,7 +217,7 @@
     if(player.access_grants?.includes(country))badges.push('به این کشور دسترسی نظامی داده‌ایم');
     const history=(player.diplomacy_log||[]).filter(item=>item.country===country).slice(-4).reverse();
     const names={trade:'تجارت انجام شد',talk:'مذاکره ثبت شد',embassy:'سفارت تأسیس شد',hosted_embassy:'سفارت دریافت شد',access:'دسترسی نظامی دریافت شد',access_grant:'دسترسی نظامی اعطا شد',bank_transfer:'انتقال بانکی انجام شد'};
-    return `<div class="card">${badges.length?`<div class="row-actions">${badges.map(label=>`<span class="pill">${label}</span>`).join('')}</div>`:'<span class="muted">هنوز توافقی با این کشور ثبت نشده است.</span>'}${history.length?`<div class="section-head"><b>توافق‌های اخیر</b></div>${history.map(item=>`<div class="row"><div class="row-main"><div class="row-title">${names[item.kind]||'روابط دیپلماتیک'}</div><small>${esc(item.message||'')} · ${new Date(item.time*1000).toLocaleDateString('fa-IR')}</small></div></div>`).join('')}`:''}</div>`;
+    return `<div class="card">${badges.length?`<div class="row-actions">${badges.map(label=>`<span class="pill">${label}</span>`).join('')}</div>`:'<span class="muted">هنوز توافقی با این کشور ثبت نشده است.</span>'}${history.length?`<div class="section-head"><b>توافق‌های اخیر</b></div>${history.map(item=>`<div class="row"><div class="row-main"><div class="row-title">${names[item.kind]||'روابط دیپلماتیک'}</div><small>${esc(item.message||'')} · ${item.time ? new Date(item.time*1000).toLocaleDateString('fa-IR') : ''}</small></div></div>`).join('')}`:''}</div>`;
   }
   function manage(p){
     if(!V)return `<h2>🏛 مدیریت کشور</h2><div class="grid">
@@ -257,8 +264,8 @@
         return `<div class="row ${locked?'locked':''}"><div class="row-main"><div class="row-title">${locked?'🔒 ':''}${esc(unit.fa)} <span class="muted">× ${fmt(owned)}</span></div><small>${locked?'پس از اخذ مجوز قابل دسترسی است':`قیمت ${fmt(unit.cost)}$ · حمله ${unit.atk} · دفاع ${unit.df}<br>کارخانه ${factories} · تولید ${fmt(unit.rate)} در روز`}</small></div>${locked?'<span class="pill">قفل</span>':`<div class="row-actions"><input aria-label="تعداد خرید" type="number" id="buy_${key}" value="1" min="1" max="5000">${btn('خرید',`act('buy',{id:'${key}',n:val('buy_${key}')})`)}${btn('کارخانه',`act('mf',{id:'${key}'})`,'secondary')}</div>`}</div>`;
       }).join('')}`;
     }
-    if(section==='dip'){
-      if(!sub)return h+`<h2>🤝 دیپلماسی</h2><div class="notice">پیشنهادها مستقیماً برای کشور مقصد ارسال می‌شوند و با پذیرش آن اجرا خواهند شد.</div>${requestList()}<div class="section-head"><b>کشورهای دیگر</b><span class="muted">${S.others.length} کشور</span></div>${S.others.length?S.others.map(c=>`<div class="row"><div class="row-main"><div class="row-title">${flag(c)} ${esc(nm(c))}</div>${ownerLabel(c)}<small>${p.embassies.includes(c)?'سفارت ما فعال':p.hosted_embassies.includes(c)?'میزبان سفارت':p.access.includes(c)?'دسترسی نظامی فعال':p.access_grants.includes(c)?'دسترسی نظامی داده‌شده':'روابط دیپلماتیک'}</small></div>${btn('بررسی روابط',`go('dip.${c}')`)}</div>`).join(''):'<div class="empty">هنوز کشور دیگری وارد سیزن نشده است.</div>'}`;
+    if(section==='dip'||section==='diplomacy'){
+      if(!sub)return h+`<h2>🤝 دیپلماسی</h2><div class="notice">پیشنهادها مستقیماً برای کشور مقصد ارسال می‌شوند و با پذیرش آن اجرا خواهند شد.</div>${requestList()}<div class="section-head"><b>کشورهای دیگر</b><span class="muted">${S.others.length} کشور</span></div>${S.others.length?S.others.map(c=>`<div class="row"><div class="row-main"><div class="row-title">${flag(c)} ${esc(nm(c))}</div>${ownerLabel(c)}<small>${p.embassies?.includes(c)?'سفارت ما فعال':p.hosted_embassies.includes(c)?'میزبان سفارت':p.access.includes(c)?'دسترسی نظامی فعال':p.access_grants.includes(c)?'دسترسی نظامی داده‌شده':'روابط دیپلماتیک'}</small></div>${btn('بررسی روابط',`go('dip.${c}')`)}</div>`).join(''):'<div class="empty">هنوز کشور دیگری وارد سیزن نشده است.</div>'}`;
       const country=sub;
       const route=parts[2]||'';
       if(parts.length===2)return h+`<h2>${flag(country)} ${esc(nm(country))}</h2>${ownerLabel(country)}${relationPanel(p,country)}<div class="grid">
@@ -266,7 +273,7 @@
         ${menuItem('📦','تجارت','مبادله‌ی تجهیزات یا پول',`dip.${country}.trade`)}
         ${menuItem('🏛️','تأسیس سفارت','با موافقت کشور مقصد',`dip.${country}.embassy`)}
         ${menuItem('🛡️','دسترسی نظامی','درخواست مجوز عبور یا استقرار',`dip.${country}.access`)}
-        ${menuItem('🏦','انتقال پول','با تأیید گیرنده · سقف روزانه ${fmt(S.bank_limit)}$',`dip.${country}.transfer`)}
+        ${menuItem('🏦','انتقال پول',`با تأیید گیرنده · سقف روزانه ${fmt(S.bank_limit)}$`,`dip.${country}.transfer`)}
       </div>`;
       if(route==='talk')return h+`<h2>💬 مذاکره با ${esc(nm(country))}</h2><div class="notice">پیام شما به کشور مقصد ارسال می‌شود؛ پذیرش ثبت می‌کند که مذاکره انجام شده است.</div><textarea id="talk-text" maxlength="800" placeholder="متن درخواست یا موضوع مذاکره"></textarea>${btn('ارسال درخواست مذاکره',`act('diplomacy',{kind:'talk',c:'${country}',text:val('talk-text')})`,'wide')}`;
       if(route==='embassy')return h+`<h2>🏛️ درخواست تأسیس سفارت</h2><div class="notice">پس از پذیرش کشور مقصد، سفارت ثبت می‌شود و هزینه‌ی آن ۱۰ قدرت سیاسی است.</div><textarea id="embassy-text" maxlength="800" placeholder="پیام همراه درخواست (اختیاری)"></textarea>${btn('ارسال درخواست سفارت',`act('diplomacy',{kind:'embassy',c:'${country}',text:val('embassy-text')})`,'wide')}`;
@@ -281,6 +288,7 @@
       if(sub==='wto')return h+`<h2>🚢 زیرساخت تجارت جهانی</h2><div class="notice">بندر و فرودگاه خودشان درآمد ندارند؛ برای تجارت تجهیزات بین کشورها پیش‌نیازند و کارمزد معامله را پایین می‌آورند.</div>${buildings('logistics')}`;
       return h+`<h2>⚛️ سازمان انرژی اتمی</h2><div class="notice ${p.nuke_ok?'good':'warn'}">${p.nuke_ok?'☢️ مجوز تولید تجهیزات هسته‌ای فعال است.':'برای درخواست مجوز، تحقیقات هسته‌ای و غنی‌سازی را کامل کنید.'}</div>${p.nuke_ok?'':`<textarea id="nuke-text" maxlength="800" placeholder="درخواست مجوز را توضیح دهید (حداقل ۲۰ حرف)"></textarea>${btn('ارسال درخواست به ادمین',`act('nuke',{text:val('nuke-text')})`,'wide')}`}`;
     }
+    if(section==='war'||sub==='war')return warPage(h,p);
     if(section==='fb')return h+`<h2>💬 بازخورد</h2><textarea id="feedback" maxlength="1000" placeholder="پیشنهاد یا گزارش خود را بنویسید"></textarea>${btn('ارسال بازخورد',`act('note',{text:val('feedback')})`,'wide')}`;
     return h+'<div class="empty">بخش پیدا نشد.</div>';
   }

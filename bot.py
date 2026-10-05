@@ -1190,11 +1190,12 @@ def api_state(uid, player, season):
         if other_uid != uid and p.get("alive") and p.get("c")
     ]
     owners = {
-        p["c"]: {
+        str(p["c"]).upper(): {
             "name": str(p.get("name") or "")[:80],
             "username": str(p.get("username") or "")[:32],
+            "uid": other_uid,
         }
-        for _, p in players
+        for other_uid, p in players
         if p.get("c")
     }
     return {
